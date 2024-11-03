@@ -1,10 +1,24 @@
 #!/bin/bash
 
+export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
 # Directories
 OUTPUT_DIRECTORY="/Users/SBirmingham/Documents/Projects/RipForge/rips"
 LOGS_DIRECTORY="/Users/SBirmingham/Documents/Projects/RipForge/logs"
 HANDBRAKE_PRESET="Apple 720p30 Surround"
 LOG_FILE="$LOGS_DIRECTORY/error.log"
+PUSHOVER_TOKEN="a88o5brgtofpqnpywgmsrwq8b36jij"
+PUSHOVER_USER="ume5x7hcaochuqafw8y9uu2x2nuu96"
+
+# Function to send a message via Pushover
+send_pushover_notification() {
+    curl -s \
+        -F "token=$PUSHOVER_TOKEN" \
+        -F "user=$PUSHOVER_USER" \
+        -F "title=$1" \
+        -F "message=$2" \
+        https://api.pushover.net/1/messages.json > /dev/null
+}
 
 # Max log size (10 MB)
 MAX_LOG_SIZE=$((1024 * 1024 * 10))
@@ -17,6 +31,7 @@ report_error() {
     local message="$1"
     echo "Error: $message" >&2
     log_message "ERROR" "$message"
+    send_pushover_notification "RipForge" "Error: $message"
     eject_dvd  # Eject DVD on failure
     log_elapsed_time
     exit 1
@@ -57,9 +72,11 @@ eject_dvd() {
         log_message "INFO" "Ejecting DVD from device: $dvd_device"
         diskutil eject "$dvd_device" || log_message "WARNING" "Failed to eject the DVD from $dvd_device."
     else
-        log_message "WARNING" "No Optical Drive found to eject."
+        log_message "WARNING" "No Optical Drive detected dynamically; attempting to eject from /dev/disk2."
+        diskutil eject /dev/disk2 || log_message "WARNING" "Failed to eject DVD from fallback device /dev/disk2."
     fi
 }
+
 
 # Extract DVD title using diskutil
 get_dvd_title() {
@@ -91,8 +108,10 @@ rotate_logs
 # Get the DVD title
 dvd_title=$(get_dvd_title)
 
+send_pushover_notification "RipForge" "RipForge Initiated - Processing '$dvd_title'"
+
 # Rip the DVD using MakeMKVcon
-rip_command="MakeMKVcon mkv disc:0 all \"$OUTPUT_DIRECTORY\""
+rip_command="/usr/local/bin/MakeMKVcon mkv disc:0 all \"$OUTPUT_DIRECTORY\""
 
 log_message "INFO" "Executing: $rip_command"
 eval $rip_command 2>&1 | tee -a "$LOG_FILE"
@@ -102,13 +121,14 @@ if [ $result -ne 0 ]; then
     report_error "MakeMKVcon failed to rip the disc."
 else
     log_message "INFO" "Successfully ripped the DVD."
+    send_pushover_notification "RipForge" "DVD ripped successfully."
 fi
 
 # Use HandBrakeCLI to encode the main feature, passing the DVD title
 output_file="$OUTPUT_DIRECTORY/${dvd_title// /_}.mp4"
 
 # Suppress standard output from HandBrakeCLI but log errors/warnings
-handbrake_command="HandBrakeCLI --main-feature --preset=\"$HANDBRAKE_PRESET\" -i \"$OUTPUT_DIRECTORY\" -o \"$output_file\""
+handbrake_command="/usr/local/bin/HandBrakeCLI --main-feature --preset=\"$HANDBRAKE_PRESET\" -i \"$OUTPUT_DIRECTORY\" -o \"$output_file\""
 
 log_message "INFO" "Executing HandBrake: $handbrake_command"
 eval $handbrake_command >/dev/null 2>>"$LOG_FILE"
@@ -118,6 +138,7 @@ if [ $handbrake_result -ne 0 ]; then
     report_error "HandBrakeCLI failed."
 else
     log_message "INFO" "Successfully encoded the main feature to $output_file."
+    send_pushover_notification "RipForge" "Encoding completed successfully."
 fi
 
 # Clean up: remove the original MKV files
@@ -130,3 +151,4 @@ eject_dvd
 
 # Log the total elapsed time
 log_elapsed_time
+send_pushover_notification "RipForge" "Process completed successfully!"
